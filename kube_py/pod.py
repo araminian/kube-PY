@@ -36,10 +36,7 @@ def getPodsInDeployment(namespace,deployment) -> list:
                 }
             podsList.append(PodData)
     except kubernetes.client.exceptions.ApiException as e:
-        if (e.status == 404):
-            return {"ErrorCode": '404', 'ErrorMsg': 'The Deployment {0} not found.'.format(deploymentName)}
-        else:
-            return {"ErrorCode": '500', 'ErrorMsg': e.reason}
+        return {"ErrorCode": '500', 'ErrorMsg': e.reason}
     
     return podsList
 
