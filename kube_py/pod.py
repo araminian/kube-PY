@@ -2,6 +2,64 @@ from os import name
 from kubernetes import client
 from kube_py.deployment import getDeployment
 import kubernetes
+from kubernetes.stream import stream
+import time
+
+
+def runScriptInPod(namespace,pod,script,podTimeout=1,scriptTimeout=1,shell='/bin/sh'):
+    
+    podWaitTimeout = time.time() + 60*podTimeout
+    # Check if the pod exists
+    podResult  = getPod(namespace=namespace,podName=pod)
+    if (type(podResult) == dict and 'ErrorCode' in podResult):
+        
+        return podResult
+    
+    v1API = client.CoreV1Api()
+
+    while True:
+            resp = v1API.read_namespaced_pod(name=pod,
+                                                    namespace=namespace)
+            if resp.status.phase == 'Running':
+                break
+            if (time.time() > podWaitTimeout):
+                return {"ErrorCode":"601","ErrorMsg": "Pod is not running after {0} minutes.".format(timeout)}
+            time.sleep(1)
+    print("Pod {0} is ready ....".format(pod))
+    print("Run script {0} ....".format(script))
+     
+    exec_command = [shell, '-c', script]
+
+    resp = stream(v1API.connect_get_namespaced_pod_exec,
+                  pod,
+                  namespace,
+                  command=exec_command,
+                  stderr=True, stdin=False,
+                  stdout=True, tty=False,
+                  _preload_content=False)
+
+
+    scriptWaitTimeout = time.time() + 60*scriptTimeout
+    while resp.is_open():
+            resp.update(timeout=1)
+
+            if (time.time() > scriptWaitTimeout):
+                resp.close()
+                return {"ErrorCode":"666","ErrorMsg": "Script timeout."}
+
+            if resp.peek_stdout():
+                print("STDOUT: %s" % resp.read_stdout())
+            if resp.peek_stderr():
+                print("STDERR: %s" % resp.read_stderr())
+
+    resp.close()
+
+    if resp.returncode != 0:
+        return {"ErrorCode":"666","ErrorMsg": "Script executes fail."}
+    else:
+        return {"StatusCode":"200"}
+
+    
 
 
 def getPodsInDeployment(namespace,deployment) -> list:
