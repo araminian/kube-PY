@@ -266,3 +266,42 @@ def getAllPods() -> list:
 
     return jsonOutput
 
+def isPodExistAndReady(pod,namespace,waitTime=2,readinessTime=1):
+
+    podWaitTimeout = time.time() + 60*waitTime
+    ifWaitForReadiness = False
+    while True:
+        if (time.time() > podWaitTimeout):
+            return {"ErrorCode":"666","ErrorMsg": "Timeout: Pod doesn't exist."}
+        
+        podResult  = getPod(namespace=namespace,podName=pod)
+        if (type(podResult) == dict and 'ErrorCode' in podResult):
+            
+            print('Wait for Pod to be created ....')
+            ifWaitForReadiness = True
+            time.sleep(5)
+            continue
+        break
+    
+    if (ifWaitForReadiness):
+        time.sleep(10)
+    readinessTimeout = time.time() + 60*readinessTime
+    while True:
+        if (time.time() > readinessTimeout):
+            return {"ErrorCode":"666","ErrorMsg": "Timeout: Pod is not ready."}
+
+        try:
+            v1API = client.CoreV1Api()
+            pod = v1API.read_namespaced_pod(name=pod,namespace=namespace)
+        except kubernetes.client.exceptions.ApiException as e:
+            print("ERROR: {0}".format(e.reason))
+            time.sleep(5)
+            continue
+            
+        if(pod.status.phase == 'Failed'):
+            return {"ErrorCode":"666","ErrorMsg": "Pod status is Failed."}
+        elif(pod.status.phase == 'Unknown'):
+            print('Pod status is Unknown.')
+        elif (pod.status.phase == 'Running'):
+            print('Pod is already Running.')
+            return {'StatusCode':'200'}
