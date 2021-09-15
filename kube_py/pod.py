@@ -1,10 +1,123 @@
-from os import name
+from os import name, path
 from kubernetes import client
 from kube_py.deployment import getDeployment
 import kubernetes
 from kubernetes.stream import stream
 import time
+import tarfile
+from tempfile import TemporaryFile
+import pathlib
 
+# Copy File from Pod to Host(Pod) : PULL
+def copyFileFromPod(namespace,pod,sourceFile,destinationDir,podTimeout=1):
+    podWaitTimeout = time.time() + 60*podTimeout
+    # Check if the pod exists
+    podResult  = getPod(namespace=namespace,podName=pod)
+    if (type(podResult) == dict and 'ErrorCode' in podResult):
+        
+        return podResult
+    
+    v1API = client.CoreV1Api()
+
+    while True:
+            resp = v1API.read_namespaced_pod(name=pod,
+                                                    namespace=namespace)
+            if resp.status.phase == 'Running':
+                break
+            if (time.time() > podWaitTimeout):
+                return {"ErrorCode":"601","ErrorMsg": "Pod is not running after {0} minutes.".format(podTimeout)}
+            time.sleep(1)
+    print("Pod {0} is ready ....".format(pod))
+    print('copying pod -> client')
+    filePath = pathlib.PurePath(sourceFile)
+    fileName = filePath.parts[-1]
+    fileParent = filePath.parent
+    
+    exec_command = ['tar', 'cf', '-', '-C' , str(fileParent) , str(fileName)]
+    
+    with TemporaryFile() as buffer:
+
+        resp = stream(v1API.connect_get_namespaced_pod_exec, pod, namespace,
+                    command=exec_command,
+                    stderr=True, stdin=True,
+                    stdout=True, tty=False,
+                    _preload_content=False)
+
+        while resp.is_open():
+            resp.update(timeout=1)
+            if resp.peek_stdout():
+                out = resp.read_stdout()
+                print("bytes received: %s" % len(out))
+                buffer.write(out.encode())
+            if resp.peek_stderr():
+                print("STDERR: %s" % resp.read_stderr())
+                return {"ErrorCode":"666","ErrorMsg": "Copy fail."}
+        resp.close()
+
+        buffer.flush()
+        buffer.seek(0)
+
+        with tarfile.open(fileobj=buffer, mode='r:') as tar:
+            tar.extractall(destinationDir)
+    return {"StatusCode":"200"}
+
+# Copy File from Host(Pod) to Pod : PUSH
+def copyFileToPod(namespace,pod,source,destinationDir,podTimeout=1):
+
+    podWaitTimeout = time.time() + 60*podTimeout
+    # Check if the pod exists
+    podResult  = getPod(namespace=namespace,podName=pod)
+    if (type(podResult) == dict and 'ErrorCode' in podResult):
+        
+        return podResult
+    
+    v1API = client.CoreV1Api()
+
+    while True:
+            resp = v1API.read_namespaced_pod(name=pod,
+                                                    namespace=namespace)
+            if resp.status.phase == 'Running':
+                break
+            if (time.time() > podWaitTimeout):
+                return {"ErrorCode":"601","ErrorMsg": "Pod is not running after {0} minutes.".format(podTimeout)}
+            time.sleep(1)
+    print("Pod {0} is ready ....".format(pod))
+    print('copying client -> pod')
+
+
+    exec_command = ['tar', 'xvf', '-', '-C', destinationDir]
+
+    resp = stream(v1API.connect_get_namespaced_pod_exec, pod, namespace,
+                command=exec_command,
+                stderr=True, stdin=True,
+                stdout=True, tty=False,
+                _preload_content=False)
+
+    source_file = source
+    fileName = source_file.split('/')[-1]
+    with TemporaryFile() as tar_buffer:
+        with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
+            tar.add(source_file,arcname=fileName)
+
+        tar_buffer.seek(0)
+        commands = []
+        commands.append(tar_buffer.read())
+
+        while resp.is_open():
+            resp.update(timeout=1)
+            if resp.peek_stdout():
+                print("STDOUT: %s" % resp.read_stdout())
+            if resp.peek_stderr():
+                print("STDERR: %s" % resp.read_stderr())
+                resp.close()
+                return {"ErrorCode":"666","ErrorMsg": "Copy fail."}
+            if commands:
+                c = commands.pop(0)
+                resp.write_stdin(c)
+            else:
+                break
+        resp.close()
+        return {"StatusCode":"200"}
 
 def runScriptInPod(namespace,pod,script,podTimeout=1,scriptTimeout=1,shell='/bin/sh'):
     
@@ -23,7 +136,7 @@ def runScriptInPod(namespace,pod,script,podTimeout=1,scriptTimeout=1,shell='/bin
             if resp.status.phase == 'Running':
                 break
             if (time.time() > podWaitTimeout):
-                return {"ErrorCode":"601","ErrorMsg": "Pod is not running after {0} minutes.".format(timeout)}
+                return {"ErrorCode":"601","ErrorMsg": "Pod is not running after {0} minutes.".format(podTimeout)}
             time.sleep(1)
     print("Pod {0} is ready ....".format(pod))
     print("Run script {0} ....".format(script))
